@@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+import pdb
 import numpy as np
 import os
 import pickle
@@ -122,7 +123,10 @@ class Trainer(object):
             pretrained_path=self.args.pretrained_path,
             adl_drop_rate=self.args.adl_drop_rate,
             adl_drop_threshold=self.args.adl_threshold,
-            acol_drop_threshold=self.args.acol_threshold)
+            acol_drop_threshold=self.args.acol_threshold,
+            resample=self.args.resample,
+            self_resample=self.args.self_resample,
+            fg_ratio=self.args.fg_ratio)
         model = model.cuda()
         print(model)
         return model
@@ -161,7 +165,7 @@ class Trainer(object):
             nesterov=True)
         return optimizer
 
-    def _wsol_training(self, images, target):
+    def _wsol_training(self, images, target, mask, force_ori):
         if (self.args.wsol_method == 'cutmix' and
                 self.args.cutmix_prob > np.random.rand(1) and
                 self.args.cutmix_beta > 0):
@@ -176,8 +180,7 @@ class Trainer(object):
         if self.args.wsol_method == 'has':
             images = wsol.method.has(images, self.args.has_grid_size,
                                      self.args.has_drop_rate)
-
-        output_dict = self.model(images, target)
+        output_dict = self.model(images, target, mask, force_ori=force_ori)
         logits = output_dict['logits']
 
         if self.args.wsol_method in ('acol', 'spg'):
@@ -188,7 +191,7 @@ class Trainer(object):
 
         return logits, loss
 
-    def train(self, split):
+    def train(self, split, epoch=0):
         self.model.train()
         loader = self.loaders[split]
 
@@ -196,14 +199,14 @@ class Trainer(object):
         num_correct = 0
         num_images = 0
 
-        for batch_idx, (images, target, _) in enumerate(loader):
+        for batch_idx, (images, target, _, mask) in enumerate(loader):
             images = images.cuda()
             target = target.cuda()
+            mask = mask.cuda()
 
             if batch_idx % int(len(loader) / 10) == 0:
                 print(" iteration ({} / {})".format(batch_idx + 1, len(loader)))
-
-            logits, loss = self._wsol_training(images, target)
+            logits, loss = self._wsol_training(images, target, mask, force_ori=epoch <= 3)
             pred = logits.argmax(dim=1)
 
             total_loss += loss.item() * images.size(0)
@@ -249,7 +252,7 @@ class Trainer(object):
         num_correct = 0
         num_images = 0
 
-        for i, (images, targets, image_ids) in enumerate(loader):
+        for i, (images, targets, image_ids, masks) in enumerate(loader):
             images = images.cuda()
             targets = targets.cuda()
             output_dict = self.model(images)
@@ -356,19 +359,19 @@ class Trainer(object):
 def main():
     trainer = Trainer()
 
-    print("===========================================================")
-    print("Start epoch 0 ...")
-    trainer.evaluate(epoch=0, split='val')
-    trainer.print_performances()
-    trainer.report(epoch=0, split='val')
-    trainer.save_checkpoint(epoch=0, split='val')
-    print("Epoch 0 done.")
+    # print("===========================================================")
+    # print("Start epoch 0 ...")
+    # trainer.evaluate(epoch=0, split='val')
+    # trainer.print_performances()
+    # trainer.report(epoch=0, split='val')
+    # trainer.save_checkpoint(epoch=0, split='val')
+    # print("Epoch 0 done.")
 
     for epoch in range(trainer.args.epochs):
         print("===========================================================")
         print("Start epoch {} ...".format(epoch + 1))
         trainer.adjust_learning_rate(epoch + 1)
-        train_performance = trainer.train(split='train')
+        train_performance = trainer.train(split='train', epoch=epoch)
         trainer.report_train(train_performance, epoch + 1, split='train')
         trainer.evaluate(epoch + 1, split='val')
         trainer.print_performances()

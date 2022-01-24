@@ -78,7 +78,7 @@ class CAMComputer(object):
 
     def compute_and_evaluate_cams(self):
         print("Computing and evaluating cams.")
-        for images, targets, image_ids in self.loader:
+        for images, targets, image_ids, _ in self.loader:
             image_size = images.shape[2:]
             images = images.cuda()
             cams = t2n(self.model(images, targets, return_cam=True))

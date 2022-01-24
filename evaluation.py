@@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+import pdb
 import argparse
 import cv2
 import numpy as np
@@ -251,7 +252,6 @@ class BoxEvaluator(LocalizationEvaluator):
             scoremap=scoremap,
             scoremap_threshold_list=self.cam_threshold_list,
             multi_contour_eval=self.multi_contour_eval)
-
         boxes_at_thresholds = np.concatenate(boxes_at_thresholds, axis=0)
 
         multiple_iou = calculate_multiple_iou(
@@ -466,7 +466,6 @@ def evaluate_wsol(scoremap_root, metadata_root, mask_root, dataset_name, split,
     metadata = configure_metadata(meta_path)
     image_ids = get_image_ids(metadata)
     cam_threshold_list = list(np.arange(0, 1, cam_curve_interval))
-
     evaluator = {"OpenImages": MaskEvaluator,
                  "CUB": BoxEvaluator,
                  "ILSVRC": BoxEvaluator

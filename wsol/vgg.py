@@ -3,6 +3,7 @@ Original code: https://github.com/pytorch/vision/blob/master/torchvision/models/
 """
 
 import os
+import pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -74,6 +75,64 @@ class VggCam(nn.Module):
                     feature_map).mean(1, keepdim=False)
             return cams
         return {'logits': logits}
+
+# Jing: config the resampling
+class VggCamResample(nn.Module):
+    def __init__(self, features, num_classes=1000, **kwargs):
+        super(VggCamResample, self).__init__()
+        self.features = features
+        self.conv6 = nn.Conv2d(512, 1024, kernel_size=3, padding=1)
+        self.relu = nn.ReLU(inplace=False)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(1024, num_classes)
+        self.self_resample = kwargs['self_resample']
+        self.fg_ratio = kwargs['fg_ratio']
+        initialize_weights(self.modules(), init_mode='he')
+
+    def resample(self, feat, mask):
+        _, C, _, _ = feat.shape
+        bg_feats = feat.permute(0, 2, 3, 1).reshape(-1, C)[(mask == 0).reshape(-1)]
+        # extract foreground feature
+        fg_feats = (feat * mask.unsqueeze(1)).sum(-1).sum(-1) / (mask.sum(-1).sum(-1) + 1e-5).unsqueeze(-1)
+        # add up the bg feature, 
+        pre_logit = self.fg_ratio * fg_feats + (1 - self.fg_ratio) * bg_feats.mean(0, keepdim=True)
+        return pre_logit
+        
+    def forward(self, x, labels=None, mask=None, return_cam=False, force_ori=False):
+        """
+        mask: (B, 14, 14)
+        ori: whether to use the original version of forward
+        """
+        x = self.features(x)
+        x = self.conv6(x)
+        x = self.relu(x)
+        if force_ori:
+            pre_logit = self.avgpool(x)
+            pre_logit = pre_logit.view(pre_logit.size(0), -1)
+        else:
+            if mask is not None and not self.self_resample:
+                pre_logit = self.resample(x, mask)
+            elif mask is not None and self.self_resample:
+                feature_map = x.detach().clone()
+                cam_weights = self.fc.weight[labels]
+                cams = (cam_weights.view(*feature_map.shape[:2], 1, 1) *
+                        feature_map).mean(1, keepdim=False)
+                cams = (cams - (cams.min(1, keepdim=True)[0]).min(2, keepdim=True)[0]) / cams.max(1, keepdim=True)[0].max(2, keepdim=True)[0]
+                mask = (cams > 0.1).long()
+                pre_logit = self.resample(x, mask)
+            else:
+                pre_logit = self.avgpool(x)
+                pre_logit = pre_logit.view(pre_logit.size(0), -1)
+        logits = self.fc(pre_logit)
+
+        if return_cam:
+            feature_map = x.detach().clone()
+            cam_weights = self.fc.weight[labels]
+            cams = (cam_weights.view(*feature_map.shape[:2], 1, 1) *
+                    feature_map).mean(1, keepdim=False)
+            return cams
+        return {'logits': logits}
+
 
 
 class VggAcol(AcolBase):
@@ -283,14 +342,15 @@ def make_layers(cfg, **kwargs):
     return nn.Sequential(*layers)
 
 
-def vgg16(architecture_type, pretrained=False, pretrained_path=None,
+def vgg16(architecture_type, pretrained=False, pretrained_path=None, resample=False,
           **kwargs):
     config_key = '28x28' if kwargs['large_feature_map'] else '14x14'
     layers = make_layers(configs_dict[architecture_type][config_key], **kwargs)
     model = {'cam': VggCam,
+             'cam_resample': VggCamResample,
              'acol': VggAcol,
              'spg': VggSpg,
-             'adl': VggCam}[architecture_type](layers, **kwargs)
+             'adl': VggCam}[architecture_type  + '_resample' if resample else ''](layers, **kwargs)
     if pretrained:
         model = load_pretrained_model(model, architecture_type,
                                       path=pretrained_path)

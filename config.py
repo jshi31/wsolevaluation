@@ -163,6 +163,10 @@ def get_configs():
                         help='model architecture: ' +
                              ' | '.join(_ARCHITECTURE_NAMES) +
                              ' (default: resnet18)')
+    parser.add_argument('--resample', action='store_true', help='Resample')
+    parser.add_argument('--self_resample', action='store_true', help='Resample Using Cam Map')
+    parser.add_argument('--fg_ratio', default=0.3, type=float,
+                        help='ratio of the foreground')
     parser.add_argument('--epochs', default=40, type=int,
                         help='number of total epochs to run')
     parser.add_argument('--pretrained', type=str2bool, nargs='?',

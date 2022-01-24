@@ -19,6 +19,7 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
 
+import pdb
 import munch
 import numpy as np
 import os
@@ -26,11 +27,12 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 from torchvision import transforms
+from util import check_box_convention
 
 _IMAGE_MEAN_VALUE = [0.485, 0.456, 0.406]
 _IMAGE_STD_VALUE = [0.229, 0.224, 0.225]
 _SPLITS = ('train', 'val', 'test')
-
+_RESIZE_LENGTH = 224
 
 def mch(**kwargs):
     return munch.Munch(dict(**kwargs))
@@ -155,6 +157,28 @@ def get_image_sizes(metadata):
     return image_sizes
 
 
+def resize_bbox(box, image_size, resize_size):
+    """
+    Args:
+        box: iterable (ints) of length 4 (x0, y0, x1, y1)
+        image_size: iterable (ints) of length 2 (width, height)
+        resize_size: iterable (ints) of length 2 (width, height)
+
+    Returns:
+         new_box: iterable (ints) of length 4 (x0, y0, x1, y1)
+    """
+    check_box_convention(np.array(box), 'x0y0x1y1')
+    box_x0, box_y0, box_x1, box_y1 = map(float, box)
+    image_w, image_h = map(float, image_size)
+    new_image_w, new_image_h = map(float, resize_size)
+
+    newbox_x0 = box_x0 * new_image_w / image_w
+    newbox_y0 = box_y0 * new_image_h / image_h
+    newbox_x1 = box_x1 * new_image_w / image_w
+    newbox_y1 = box_y1 * new_image_h / image_h
+    return int(newbox_x0), int(newbox_y0), int(newbox_x1), int(newbox_y1)
+
+
 class WSOLImageLabelDataset(Dataset):
     def __init__(self, data_root, metadata_root, transform, proxy,
                  num_sample_per_class=0):
@@ -166,6 +190,19 @@ class WSOLImageLabelDataset(Dataset):
         self.num_sample_per_class = num_sample_per_class
 
         self._adjust_samples_per_class()
+
+        self.resize_length = _RESIZE_LENGTH
+        self.original_bboxes = get_bounding_boxes(self.metadata)
+        self.image_sizes = get_image_sizes(self.metadata)
+        self.gt_bboxes = self._load_resized_boxes(self.original_bboxes)
+
+    def _load_resized_boxes(self, original_bboxes):
+        resized_bbox = {image_id: [
+            resize_bbox(bbox, self.image_sizes[image_id],
+                        (self.resize_length, self.resize_length))
+            for bbox in original_bboxes[image_id]]
+            for image_id in self.image_ids}
+        return resized_bbox
 
     def _adjust_samples_per_class(self):
         if self.num_sample_per_class == 0:
@@ -196,7 +233,21 @@ class WSOLImageLabelDataset(Dataset):
         image = Image.open(os.path.join(self.data_root, image_id))
         image = image.convert('RGB')
         image = self.transform(image)
-        return image, image_label, image_id
+        # box 
+        box = self.gt_bboxes[image_id]
+        box = np.array(box)  # (N, 4) x1,y1,x2,y2
+        # construct grid
+        n_grid = 14
+        x_cg = y_cg = self.resize_length / (2 * n_grid) + np.arange(n_grid) * self.resize_length / n_grid  # cg: center grid
+        x_cg, y_cg = np.meshgrid(x_cg, y_cg)
+        y_cg = y_cg[None, :]
+        x_cg = x_cg[None, :]
+        bool_y_cg = (box[:, None, None, 1] < y_cg) * (y_cg < box[:, None, None, 3])
+        bool_x_cg = (box[:, None, None, 0] < x_cg) * (x_cg < box[:, None, None, 2])
+        bool_cg = bool_y_cg * bool_x_cg
+        feat_mask = bool_cg.sum(0)
+        
+        return image, image_label, image_id, feat_mask
 
     def __len__(self):
         return len(self.image_ids)
